@@ -10,6 +10,8 @@ Sistema de chat automatizado para pré-vendas que integra com Pipefy e Cal.com p
 - **Sincronização bidirecional** entre chat, Pipefy e Cal.com
 - **Gerenciamento de sessão** com timeout configurável
 - **Cache local de mensagens** para melhor experiência do usuário
+- **Acessibilidade completa** com navegação por teclado (Tab, Enter, Esc, setas)
+- **Interface responsiva** com Tailwind CSS (mobile-first)
 
 ## 📁 Estrutura do Projeto
 
@@ -37,6 +39,7 @@ test-coding-sdr/
 ### Frontend
 - **React** + **TypeScript**
 - **Vite** - Build tool
+- **Tailwind CSS** - Framework CSS utilitário
 
 ## 📦 Instalação
 
@@ -167,6 +170,39 @@ Quando uma sessão expira por inatividade, o sistema retorna uma mensagem inform
 O frontend implementa um cache local das mensagens usando `localStorage` para melhorar a experiência do usuário. As mensagens são automaticamente carregadas do cache quando o usuário recarrega a página, permitindo continuidade da conversa sem perder o histórico.
 
 **Nota:** Para produção, poderíamos reduzir a retenção local dependendo das políticas de privacidade da empresa.
+
+## ♿ Acessibilidade
+
+O chat implementa recursos de acessibilidade completos seguindo as diretrizes WCAG:
+
+### Navegação por Teclado
+
+- **Tab**: Navega entre elementos interativos (input, botão enviar, slots de horário)
+- **Enter**: Envia mensagem no input ou seleciona um horário disponível
+- **Esc**: Cancela seleção de horários e retorna o foco para o input
+- **Setas ↑↓**: Navega entre os slots de horário disponíveis
+- **Home/End**: Vai para o primeiro/último slot de horário
+
+### Recursos ARIA
+
+- `role="log"` e `aria-live="polite"` no container de mensagens
+- `aria-label` em todos os elementos interativos
+- `aria-describedby` para descrições contextuais
+- `role="group"` para grupos de elementos relacionados (slots)
+- Classes `sr-only` para texto acessível apenas a leitores de tela
+
+### Indicadores Visuais
+
+- Foco visível em todos os elementos interativos (ring azul)
+- Estados hover e focus distintos
+- Feedback visual durante carregamento
+- Suporte a modo escuro/claro (prefers-color-scheme)
+
+### Responsividade
+
+- Design mobile-first com Tailwind CSS
+- Breakpoints responsivos para diferentes tamanhos de tela
+- Layout adaptável que funciona em dispositivos móveis e desktop
 
 ## 📝 Licença
 
