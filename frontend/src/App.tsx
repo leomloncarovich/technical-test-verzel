@@ -1,14 +1,13 @@
-import Chat from './components/Chat'
+import Chat from './components/Chat';
+import HeroConsultoria from './components/HeroConsultoria';
 
-export default function App(){
+export default function App() {
   return (
-    <main>
-      <h1>SDR Agent</h1>
-      <Chat />
-      <style>{`
-        main { font-family: system-ui, -apple-system, Segoe UI, Roboto; padding: 16px; }
-        h1 { text-align: center; }
-      `}</style>
+    <main className="min-h-screen w-full bg-gray-50 dark:bg-gray-900 font-sans">
+      <HeroConsultoria />
+      <div className="w-full max-w-5xl mx-auto px-4 py-6 sm:px-6 sm:py-8">
+        <Chat />
+      </div>
     </main>
-  )
+  );
 }
