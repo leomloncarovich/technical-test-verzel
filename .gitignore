@@ -72,3 +72,4 @@ build/
 *.tmp
 *.temp
 
+logs_result (4).json

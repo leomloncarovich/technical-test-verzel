@@ -53,18 +53,14 @@ def schedule(body: ScheduleIn):
         # Busca o lead para usar nome e email se não foram fornecidos
         lead = get_lead_by_session(db, body.sessionId)
         
-        # Debug: mostra o estado do lead
-        print(f"[SCHEDULE] Lead encontrado: name={lead.name}, email={lead.email}, company={lead.company}")
-        print(f"[SCHEDULE] Request: attendeeName={body.attendeeName}, attendeeEmail={body.attendeeEmail}")
-        
         attendee_name = body.attendeeName or (lead.name or "Convidado")
         attendee_email = body.attendeeEmail or (lead.email if lead.email else None)
 
         if not attendee_email:
-            attendee_email = f"lead-{body.sessionId[:8]}@example.com"
-            print(f"[SCHEDULE] ⚠️ Email do lead não encontrado, usando fallback: {attendee_email}")
-        else:
-            print(f"[SCHEDULE] ✅ Usando email do lead: {attendee_email}, nome: {attendee_name}")
+            raise HTTPException(
+                status_code=400,
+                detail="Email do lead não encontrado. Por favor, forneça um email válido."
+            )
 
         result = schedule_slot(
             body.slotId,
@@ -110,20 +106,15 @@ def schedule(body: ScheduleIn):
                     for matching_lead in matching_leads:
                         if _is_pipefy_card_id(matching_lead.session_id):
                             found_card_id = matching_lead.session_id
-                            print(f"[SCHEDULE] 🔍 Card_id encontrado no DB por email: {found_card_id}")
                             break
                 
                 # PRIORIDADE 2: Se não encontrou no DB, busca no Pipefy por email (mais confiável que título)
                 if not found_card_id and lead.email and "@" in lead.email:
                     found_card_id = find_card_by_email(pipe_id, lead.email)
-                    if found_card_id:
-                        print(f"[SCHEDULE] 🔍 Card encontrado no Pipefy por email: {found_card_id}")
                 
                 # PRIORIDADE 3: Se não encontrou por email, busca no Pipefy pelo título (UUID)
                 if not found_card_id:
                     found_card_id = find_card_by_title(pipe_id, body.sessionId[:20])
-                    if found_card_id:
-                        print(f"[SCHEDULE] 🔍 Card encontrado no Pipefy por título (UUID): {found_card_id}")
                 
                 # PRIORIDADE 4: Busca no banco de dados por qualquer lead com card_id relacionado ao UUID
                 # Verifica se há mensagens ou meetings com o UUID que possam indicar o card_id
@@ -145,13 +136,10 @@ def schedule(body: ScheduleIn):
                 if found_card_id:
                     pipefy_card_id = found_card_id
                 else:
-                    print(f"[SCHEDULE] ⚠️ Card_id do Pipefy não encontrado para sessionId {body.sessionId}, pulando update")
                     return result
-            except Exception as e:
-                print(f"[SCHEDULE] ⚠️ Erro ao buscar card_id do Pipefy: {e}")
-                import traceback
-                traceback.print_exc()
+            except Exception:
                 # Continua sem atualizar Pipefy se não conseguir encontrar o card_id
+                pass
         
         try:
             # Parse da data/hora do meeting
@@ -165,36 +153,21 @@ def schedule(body: ScheduleIn):
                 meeting_date = meeting_brt.strftime("%Y-%m-%d")
                 meeting_time = meeting_brt.strftime("%H:%M")
                 
-                # Chama endpoint interno para atualizar Pipefy
-                # Faz de forma assíncrona para não bloquear a resposta
+                # Atualiza Pipefy diretamente (sem chamada HTTP interna)
                 try:
-                    # No Vercel, usa a URL do próprio deployment
-                    base_url = os.getenv("API_BASE_URL") or os.getenv("VERCEL_URL", "http://localhost:8000")
-                    if base_url and not base_url.startswith("http"):
-                        base_url = f"https://{base_url}"
-                    with httpx.Client(timeout=5.0) as client:
-                        update_payload = {
-                            "sessionId": pipefy_card_id,  # Usa o card_id encontrado, não o UUID original
-                            "date": meeting_date,
-                            "time": meeting_time,
-                            "meetLink": result["meetingLink"],
-                        }
-                        # Faz chamada não-bloqueante (fire and forget)
-                        # Em produção, considere usar background tasks do FastAPI
-                        try:
-                            client.post(
-                                f"{base_url}/api/pipefy/updateBooking",
-                                json=update_payload,
-                                timeout=5.0
-                            )
-                            print(f"[SCHEDULE] ✅ Pipefy update iniciado para card {pipefy_card_id}")
-                        except Exception as e:
-                            # Não falha o agendamento se o Pipefy falhar
-                            print(f"[SCHEDULE] ⚠️ Erro ao atualizar Pipefy (não crítico): {e}")
-                except Exception as e:
-                    print(f"[SCHEDULE] ⚠️ Erro ao preparar update do Pipefy: {e}")
-        except Exception as e:
-            print(f"[SCHEDULE] ⚠️ Erro ao processar data para Pipefy: {e}")
+                    from app.core.pipefy import update_card_booking
+                    update_card_booking(
+                        card_id=pipefy_card_id,
+                        meeting_date=meeting_date,
+                        meeting_time=meeting_time,
+                        meeting_location=result["meetingLink"],
+                        phase_id=None,
+                    )
+                except Exception:
+                    # Não falha o agendamento se o Pipefy falhar
+                    pass
+        except Exception:
+            pass
     
     return result
 
@@ -228,12 +201,10 @@ def cancel(body: CancelIn):
         # Cancela no Cal.com (se tiver booking_id)
         if meeting.booking_id:
             try:
-                cal_res = cancel_booking(meeting.booking_id, reason=body.reason)
-                print("[CANCEL] Cal.com OK:", cal_res)
-            except Exception as e:
-                # Se preferir bloquear, troque por:
-                # raise HTTPException(status_code=502, detail=str(e))
-                print("[CANCEL] ⚠️ Falha ao cancelar no Cal.com:", e)
+                cancel_booking(meeting.booking_id, reason=body.reason)
+            except Exception:
+                # Não bloqueia o cancelamento local se o Cal.com falhar
+                pass
 
         # Marca cancelamento local
         meeting.canceled_at = datetime.utcnow()

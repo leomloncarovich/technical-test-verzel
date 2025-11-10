@@ -35,7 +35,6 @@ async def pipefy_webhook(payload: dict):
     Recebe webhook do Pipefy quando um card é criado.
     Extrai dados do lead e dispara o fluxo SDR via /api/chat.
     """
-    print(f"[PIPEFY WEBHOOK] Recebido: {payload}")
     
     try:
         # Extrai dados do payload do Pipefy
@@ -88,8 +87,6 @@ async def pipefy_webhook(payload: dict):
         if not card_id:
             raise HTTPException(status_code=400, detail="card_id não encontrado no payload")
         
-        print(f"[PIPEFY WEBHOOK] Card ID: {card_id}")
-        print(f"[PIPEFY WEBHOOK] Lead extraído: name={name}, email={email}, company={company}, need={need}")
         
         # Prepara payload para /api/chat
         chat_payload = {
@@ -119,9 +116,7 @@ async def pipefy_webhook(payload: dict):
                 )
                 response.raise_for_status()
                 chat_result = response.json()
-                print(f"[PIPEFY WEBHOOK] ✅ Chat iniciado: {chat_result.get('reply', '')[:50]}...")
         except Exception as e:
-            print(f"[PIPEFY WEBHOOK] ⚠️ Erro ao chamar /api/chat: {e}")
             # Não falha o webhook se o chat falhar
             raise HTTPException(
                 status_code=502,
@@ -137,7 +132,6 @@ async def pipefy_webhook(payload: dict):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[PIPEFY WEBHOOK] ❌ Erro ao processar webhook: {type(e).__name__}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao processar webhook: {str(e)}")
 
 @router.post("/pipefy/updateBooking")
@@ -146,8 +140,6 @@ def update_booking(body: UpdateBookingIn):
     Atualiza o card no Pipefy quando um meeting é agendado.
     Preenche campos de meeting e move para fase "Agendado".
     """
-    print(f"[PIPEFY UPDATE] Atualizando booking: sessionId={body.sessionId}, date={body.date}, time={body.time}")
-    
     try:
         # Valida formato de data
         try:
@@ -171,8 +163,6 @@ def update_booking(body: UpdateBookingIn):
             phase_id=None,  # Busca dinamicamente a fase "Agendado"
         )
         
-        print(f"[PIPEFY UPDATE] ✅ Card atualizado: {result}")
-        
         return {
             "ok": True,
             "card_id": body.sessionId,
@@ -182,6 +172,5 @@ def update_booking(body: UpdateBookingIn):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[PIPEFY UPDATE] ❌ Erro ao atualizar booking: {type(e).__name__}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao atualizar booking: {str(e)}")
 

@@ -118,7 +118,6 @@ export default function Chat() {
       const data = await schedule(slotId, sessionId, {
         startIso: start,
         endIso: end,
-        attendeeEmail: 'lead@example.com',
       });
       setMessages(m => [...m, { who: 'bot', text: `Reunião marcada! Link: ${data.meetingLink}` }]);
       setSlots(null);

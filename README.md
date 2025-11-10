@@ -83,8 +83,9 @@ PIPEFY_PIPE_ID=306783445
 SESSION_TTL_HOURS=2  # Padrão recomendado para ambiente de teste técnico
 
 # Opcional
-MOCK_EXTERNALS=false  # true para usar mocks
+MOCK_EXTERNALS=false  # IMPORTANTE: defina como "false" para agendar reuniões reais no Cal.com
 API_BASE_URL=http://localhost:8000
+TIMEZONE=America/Sao_Paulo  # Timezone para agendamentos
 ```
 
 ## 🚀 Execução
