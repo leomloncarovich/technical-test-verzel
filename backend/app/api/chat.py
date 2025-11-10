@@ -391,6 +391,20 @@ def chat(body: ChatIn):
             }
 
         resp = llm.respond(build_state(), body.message)
+        action_type = (resp.get("action") or {}).get("type")
+        
+        # Se o lead não for ICP (NO_INTEREST), não coletar dados nem criar cards
+        if action_type == "NO_INTEREST":
+            lead_partial_from_llm = resp.get("leadPartial") or {}
+            # Apenas salva a mensagem do usuário e a resposta do LLM, sem coletar dados
+            db.add(Message(session_id=session_id, role="assistant", content=resp.get("reply", "")))
+            db.commit()
+            return {
+                "reply": resp.get("reply", ""),
+                "action": resp.get("action"),
+                "sessionId": session_id,
+            }
+        
         lead_partial_from_llm = resp.get("leadPartial") or {}
         merged = merge_lead(lead, lead_partial_from_llm)
         
