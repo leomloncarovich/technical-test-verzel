@@ -11,5 +11,7 @@ class Settings:
     PIPEFY_API_TOKEN: str | None = os.getenv("PIPEFY_API_TOKEN")
     PIPEFY_PIPE_ID: str | None = os.getenv("PIPEFY_PIPE_ID")
     PIPEFY_STAGE_ID_PREVENDAS: str | None = os.getenv("PIPEFY_STAGE_ID_PREVENDAS")
+    # Timeout de sessão em horas (deve ser definido no .env, padrão recomendado: 2)
+    SESSION_TTL_HOURS: int = int(os.getenv("SESSION_TTL_HOURS", "2"))
 
 settings = Settings()

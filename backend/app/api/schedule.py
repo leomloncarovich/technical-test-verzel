@@ -8,7 +8,8 @@ import httpx
 import os
 
 from app.core.calendar import get_slots, schedule_slot, cancel_booking
-from app.models.db import get_session, Meeting, get_lead_by_session
+from app.models.db import get_session, Meeting, get_lead_by_session, Lead, Message
+from app.core.pipefy import find_card_by_title, find_card_by_email
 
 router = APIRouter()
 
@@ -51,14 +52,19 @@ def schedule(body: ScheduleIn):
     with get_session() as db:
         # Busca o lead para usar nome e email se não foram fornecidos
         lead = get_lead_by_session(db, body.sessionId)
+        
+        # Debug: mostra o estado do lead
+        print(f"[SCHEDULE] Lead encontrado: name={lead.name}, email={lead.email}, company={lead.company}")
+        print(f"[SCHEDULE] Request: attendeeName={body.attendeeName}, attendeeEmail={body.attendeeEmail}")
+        
         attendee_name = body.attendeeName or (lead.name or "Convidado")
-        attendee_email = body.attendeeEmail or lead.email
+        attendee_email = body.attendeeEmail or (lead.email if lead.email else None)
 
         if not attendee_email:
             attendee_email = f"lead-{body.sessionId[:8]}@example.com"
-            print(f"[SCHEDULE] ⚠️ Email do lead não encontrado, usando: {attendee_email}")
+            print(f"[SCHEDULE] ⚠️ Email do lead não encontrado, usando fallback: {attendee_email}")
         else:
-            print(f"[SCHEDULE] Usando email do lead: {attendee_email}, nome: {attendee_name}")
+            print(f"[SCHEDULE] ✅ Usando email do lead: {attendee_email}, nome: {attendee_name}")
 
         result = schedule_slot(
             body.slotId,
@@ -78,7 +84,75 @@ def schedule(body: ScheduleIn):
         db.commit()
         
         # Atualiza card no Pipefy se sessionId for um card_id do Pipefy
-        # (assumimos que se sessionId é numérico e grande, pode ser um card_id)
+        # Primeiro, tenta encontrar o card_id do Pipefy se sessionId for um UUID
+        pipefy_card_id = body.sessionId
+        
+        def _is_pipefy_card_id(session_id: str) -> bool:
+            """Verifica se sessionId parece ser um card_id do Pipefy."""
+            if not session_id:
+                return False
+            return session_id.isdigit() and len(session_id) >= 6
+        
+        if not _is_pipefy_card_id(pipefy_card_id):
+            # Se não é um card_id, tenta encontrar o card_id correspondente
+            try:
+                pipe_id = os.getenv("PIPEFY_PIPE_ID", "306783445")
+                found_card_id = None
+                
+                # PRIORIDADE 1: Busca no banco de dados por um lead com card_id que tenha o mesmo email
+                # Isso é mais confiável porque o email é único
+                if lead.email and "@" in lead.email:
+                    stmt = select(Lead).where(
+                        (Lead.email == lead.email) &
+                        (Lead.session_id != body.sessionId)
+                    )
+                    matching_leads = db.exec(stmt).all()
+                    for matching_lead in matching_leads:
+                        if _is_pipefy_card_id(matching_lead.session_id):
+                            found_card_id = matching_lead.session_id
+                            print(f"[SCHEDULE] 🔍 Card_id encontrado no DB por email: {found_card_id}")
+                            break
+                
+                # PRIORIDADE 2: Se não encontrou no DB, busca no Pipefy por email (mais confiável que título)
+                if not found_card_id and lead.email and "@" in lead.email:
+                    found_card_id = find_card_by_email(pipe_id, lead.email)
+                    if found_card_id:
+                        print(f"[SCHEDULE] 🔍 Card encontrado no Pipefy por email: {found_card_id}")
+                
+                # PRIORIDADE 3: Se não encontrou por email, busca no Pipefy pelo título (UUID)
+                if not found_card_id:
+                    found_card_id = find_card_by_title(pipe_id, body.sessionId[:20])
+                    if found_card_id:
+                        print(f"[SCHEDULE] 🔍 Card encontrado no Pipefy por título (UUID): {found_card_id}")
+                
+                # PRIORIDADE 4: Busca no banco de dados por qualquer lead com card_id relacionado ao UUID
+                # Verifica se há mensagens ou meetings com o UUID que possam indicar o card_id
+                if not found_card_id:
+                    # Busca mensagens com o UUID para encontrar o card_id relacionado
+                    stmt = select(Message).where(Message.session_id == body.sessionId).limit(1)
+                    message = db.exec(stmt).first()
+                    if message:
+                        # Se há mensagens, busca por leads que possam estar relacionados
+                        # Busca por qualquer lead com card_id que tenha sido criado recentemente
+                        stmt = select(Lead).where(
+                            (Lead.session_id != body.sessionId) &
+                            (Lead.email.isnot(None))
+                        )
+                        # Tenta encontrar um lead que possa estar relacionado
+                        # (esta é uma busca menos precisa, mas pode ajudar)
+                        pass  # Esta busca é muito ampla, vamos pular
+                
+                if found_card_id:
+                    pipefy_card_id = found_card_id
+                else:
+                    print(f"[SCHEDULE] ⚠️ Card_id do Pipefy não encontrado para sessionId {body.sessionId}, pulando update")
+                    return result
+            except Exception as e:
+                print(f"[SCHEDULE] ⚠️ Erro ao buscar card_id do Pipefy: {e}")
+                import traceback
+                traceback.print_exc()
+                # Continua sem atualizar Pipefy se não conseguir encontrar o card_id
+        
         try:
             # Parse da data/hora do meeting
             meeting_dt = _parse_iso(result["meetingDatetime"])
@@ -94,10 +168,13 @@ def schedule(body: ScheduleIn):
                 # Chama endpoint interno para atualizar Pipefy
                 # Faz de forma assíncrona para não bloquear a resposta
                 try:
-                    base_url = os.getenv("API_BASE_URL", "http://localhost:8000")
+                    # No Vercel, usa a URL do próprio deployment
+                    base_url = os.getenv("API_BASE_URL") or os.getenv("VERCEL_URL", "http://localhost:8000")
+                    if base_url and not base_url.startswith("http"):
+                        base_url = f"https://{base_url}"
                     with httpx.Client(timeout=5.0) as client:
                         update_payload = {
-                            "sessionId": body.sessionId,
+                            "sessionId": pipefy_card_id,  # Usa o card_id encontrado, não o UUID original
                             "date": meeting_date,
                             "time": meeting_time,
                             "meetLink": result["meetingLink"],
@@ -110,7 +187,7 @@ def schedule(body: ScheduleIn):
                                 json=update_payload,
                                 timeout=5.0
                             )
-                            print(f"[SCHEDULE] ✅ Pipefy update iniciado para card {body.sessionId}")
+                            print(f"[SCHEDULE] ✅ Pipefy update iniciado para card {pipefy_card_id}")
                         except Exception as e:
                             # Não falha o agendamento se o Pipefy falhar
                             print(f"[SCHEDULE] ⚠️ Erro ao atualizar Pipefy (não crítico): {e}")

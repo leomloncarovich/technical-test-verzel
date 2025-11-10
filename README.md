@@ -8,6 +8,8 @@ Sistema de chat automatizado para pré-vendas que integra com Pipefy e Cal.com p
 - **Integração com Pipefy** para sincronização de dados em tempo real
 - **Integração com Cal.com** para agendamento de reuniões
 - **Sincronização bidirecional** entre chat, Pipefy e Cal.com
+- **Gerenciamento de sessão** com timeout configurável
+- **Cache local de mensagens** para melhor experiência do usuário
 
 ## 📁 Estrutura do Projeto
 
@@ -77,6 +79,9 @@ CAL_EVENT_TYPE_ID=123456  # opcional
 PIPEFY_TOKEN=seu_token_pipefy
 PIPEFY_PIPE_ID=306783445
 
+# Session Management
+SESSION_TTL_HOURS=2  # Padrão recomendado para ambiente de teste técnico
+
 # Opcional
 MOCK_EXTERNALS=false  # true para usar mocks
 API_BASE_URL=http://localhost:8000
@@ -99,10 +104,46 @@ cd frontend
 npm run dev
 ```
 
+## 🚀 Deploy no Vercel
+
+O projeto está configurado para deploy completo (frontend + backend) no Vercel.
+
+### Configuração
+
+1. **Conecte o repositório ao Vercel:**
+   - Acesse [vercel.com](https://vercel.com)
+   - Importe o repositório
+   - O Vercel detectará automaticamente a configuração do `vercel.json`
+
+2. **Configure as variáveis de ambiente:**
+   - No painel do Vercel, vá em Settings → Environment Variables
+   - Adicione todas as variáveis necessárias:
+     - `GEMINI_API_KEY`
+     - `CAL_API_KEY`
+     - `CAL_USERNAME`
+     - `CAL_EVENT_TYPE_SLUG`
+     - `PIPEFY_TOKEN`
+     - `PIPEFY_PIPE_ID`
+     - `SESSION_TTL_HOURS` (opcional, padrão: 2)
+
+3. **Deploy:**
+   - O Vercel fará o build automaticamente:
+     - Frontend: build do Vite em `frontend/dist`
+     - Backend: serverless functions Python em `/api/*`
+   - As rotas `/api/*` são direcionadas para o backend Python
+   - Todas as outras rotas servem o frontend React
+
+### Estrutura de Deploy
+
+- **Frontend:** Servido como arquivos estáticos do build do Vite
+- **Backend:** Serverless functions Python (FastAPI)
+- **Rotas:**
+  - `/api/*` → Backend Python
+  - `/*` → Frontend React (SPA)
+
 ## 📚 Documentação
 
 - [PIPEFY.md](backend/PIPEFY.md) - Integração com Pipefy
-- [DEPLOY_VERCEL.md](backend/DEPLOY_VERCEL.md) - Deploy no Vercel
 - [CRIAR_WEBHOOK.md](backend/CRIAR_WEBHOOK.md) - Configurar webhooks
 - [TESTE_PIPEFY.md](backend/TESTE_PIPEFY.md) - Como testar integrações
 
@@ -113,6 +154,18 @@ npm run dev
 - `POST /api/schedule` - Agendar reunião
 - `POST /api/pipefy/webhook` - Webhook do Pipefy
 - `POST /api/pipefy/updateBooking` - Atualizar booking no Pipefy
+
+## ⏰ Gerenciamento de Sessão
+
+O sistema implementa um timeout de sessão configurável via variável de ambiente `SESSION_TTL_HOURS`. O padrão recomendado para ambiente de teste técnico é **2 horas** (`SESSION_TTL_HOURS=2`), que é curto o suficiente para parecer profissional e não poluir o banco de dados, mas longo o suficiente para permitir testes sem que a sessão expire frequentemente.
+
+Quando uma sessão expira por inatividade, o sistema retorna uma mensagem informando ao usuário que a sessão expirou e que é necessário recarregar a página para iniciar uma nova conversa.
+
+## 💾 Cache Local de Mensagens
+
+O frontend implementa um cache local das mensagens usando `localStorage` para melhorar a experiência do usuário. As mensagens são automaticamente carregadas do cache quando o usuário recarrega a página, permitindo continuidade da conversa sem perder o histórico.
+
+**Nota:** Para produção, poderíamos reduzir a retenção local dependendo das políticas de privacidade da empresa.
 
 ## 📝 Licença
 

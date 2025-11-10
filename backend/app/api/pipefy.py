@@ -109,7 +109,10 @@ async def pipefy_webhook(payload: dict):
             async with httpx.AsyncClient(timeout=30.0) as client:
                 # URL base do backend (pode ser configurada via env var)
                 import os
-                base_url = os.getenv("API_BASE_URL", "http://localhost:8000")
+                # No Vercel, usa a URL do próprio deployment
+                base_url = os.getenv("API_BASE_URL") or os.getenv("VERCEL_URL", "http://localhost:8000")
+                if base_url and not base_url.startswith("http"):
+                    base_url = f"https://{base_url}"
                 response = await client.post(
                     f"{base_url}/api/chat",
                     json=chat_payload
@@ -159,12 +162,13 @@ def update_booking(body: UpdateBookingIn):
             raise HTTPException(status_code=400, detail="Formato de hora inválido. Use HH:MM")
         
         # Atualiza card no Pipefy
+        # phase_id=None faz o código buscar dinamicamente a fase "Agendado"
         result = update_card_booking(
             card_id=body.sessionId,
             meeting_date=body.date,
             meeting_time=body.time,
             meeting_location=body.meetLink,
-            phase_id=PHASE_AGENDADO_ID,
+            phase_id=None,  # Busca dinamicamente a fase "Agendado"
         )
         
         print(f"[PIPEFY UPDATE] ✅ Card atualizado: {result}")
