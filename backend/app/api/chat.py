@@ -14,20 +14,30 @@ from app.core import llm
 from app.models.db import (
     get_session,
     Message,
+    Lead,
     init_db,
     get_lead_by_session,
     merge_lead,
 )
-from app.core.calendar import get_slots   # Cal.com ou mock, conforme .env
-from app.core.pipefy import update_card_lead_fields
+from app.core.calendar import get_slots
+from app.core.pipefy import update_card_lead_fields, create_card, find_card_by_email, FIELD_NAMES, _ensure_field_ids_initialized
+from app.core.config import settings
+import os
 
-# -----------------------------------------------------------------------------
-# Config & setup
-# -----------------------------------------------------------------------------
-init_db()
 router = APIRouter()
 
+_db_initialized = False
+def _ensure_db():
+    global _db_initialized
+    if not _db_initialized:
+        try:
+            init_db()
+            _db_initialized = True
+        except Exception as e:
+            print(f"[CHAT] ⚠️ Erro ao inicializar DB (pode ser normal): {e}")
+
 BRT = ZoneInfo("America/Sao_Paulo")
+SESSION_TTL_HOURS = settings.SESSION_TTL_HOURS
 
 class ChatIn(BaseModel):
     message: str
@@ -38,9 +48,24 @@ def load_history(db, session_id: str, limit: int = 20) -> List[dict]:
     rows = db.exec(stmt).all()
     return [{"role": m.role, "content": m.content, "ts": m.ts.isoformat()} for m in rows][-limit:]
 
-# -----------------------------------------------------------------------------
-# Utilitários de tempo / filtro
-# -----------------------------------------------------------------------------
+def is_session_expired(db, session_id: str) -> Tuple[bool, Optional[datetime]]:
+    """
+    Verifica se a sessão expirou baseado na última mensagem.
+    Retorna (is_expired, last_activity) onde last_activity é o timestamp da última mensagem.
+    """
+    stmt = select(Message).where(Message.session_id == session_id).order_by(Message.ts.desc())
+    last_message = db.exec(stmt).first()
+    
+    if not last_message:
+        return False, None
+    
+    last_activity = last_message.ts
+    now = datetime.utcnow()
+    ttl = timedelta(hours=settings.SESSION_TTL_HOURS)
+    
+    is_expired = (now - last_activity) > ttl
+    return is_expired, last_activity
+
 def _to_brt(dt: datetime) -> datetime:
     return dt.astimezone(BRT)
 
@@ -61,21 +86,17 @@ def filter_slots_by_window(slots: List[dict], rs: datetime, re: datetime) -> Lis
     end_brt   = _to_brt(re)
     out = []
     for s in slots:
-        # Parse mais robusto do ISO string
         slot_start_str = s.get("start", "")
         if not slot_start_str:
             continue
-        # Normaliza timezone
         if slot_start_str.endswith("Z"):
             slot_start_str = slot_start_str[:-1] + "+00:00"
         try:
             dt_start = datetime.fromisoformat(slot_start_str).astimezone(BRT)
             if start_brt <= dt_start < end_brt:
                 out.append(s)
-            else:
-                print(f"[FILTER] Slot {s.get('id', '?')} fora da janela: {dt_start} (BRT) não está entre {start_brt} e {end_brt}")
-        except Exception as e:
-            print(f"[FILTER] Erro ao parsear slot {s.get('id', '?')}: {slot_start_str} - {e}")
+        except Exception:
+            pass
     return out
 
 def clamp_after_hour(slots: List[dict], h_min: int) -> List[dict]:
@@ -86,11 +107,7 @@ def clamp_after_hour(slots: List[dict], h_min: int) -> List[dict]:
             hour = _brt_hour_from_iso(s["start"])
             if hour >= h_min:
                 out.append(s)
-            else:
-                print(f"[CLAMP] Slot {s.get('id', '?')} removido: hora {hour} < {h_min}")
-        except Exception as e:
-            print(f"[CLAMP] Erro ao processar slot {s.get('id', '?')}: {e}")
-            # Mantém o slot se não conseguir processar
+        except Exception:
             out.append(s)
     return out
 
@@ -101,8 +118,6 @@ def _is_pipefy_card_id(session_id: str) -> bool:
     """
     if not session_id:
         return False
-    # Pipefy card IDs são geralmente numéricos (string numérica)
-    # Pode ser um número grande (ex: "123456789")
     return session_id.isdigit() and len(session_id) >= 6
 
 def prioritize_slots(slots: List[dict], alvo_h: Optional[int]) -> List[dict]:
@@ -114,9 +129,6 @@ def prioritize_slots(slots: List[dict], alvo_h: Optional[int]) -> List[dict]:
         key=lambda s: abs(_brt_hour_from_iso(s["start"]) - alvo_h) + (_brt_minute_from_iso(s["start"]) / 60.0)
     )
 
-# -----------------------------------------------------------------------------
-# Parser de data/hora em pt-BR com preferências
-# -----------------------------------------------------------------------------
 WEEKDAYS = {
     "segunda": 0, "terça": 1, "terca": 1, "quarta": 2, "quinta": 3, "sexta": 4, "sábado": 5, "sabado": 5, "domingo": 6
 }
@@ -149,14 +161,12 @@ def parse_date_pt(text: str) -> Tuple[datetime, bool]:
     if "hoje" in t:
         return datetime.combine(base, time(0,0), tzinfo=BRT), mentions_tomorrow
 
-    # dia da semana
     m = re.search(r"(pr[óo]xima?|na|no)\s+(segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo)", t)
     if m:
         wd = WEEKDAYS[m.group(2)]
         nxt = _next_weekday(base, wd, include_today=("hoje" in t))
         return datetime.combine(nxt, time(0,0), tzinfo=BRT), mentions_tomorrow
 
-    # "dia 10"
     m = re.search(r"\bdia\s+(\d{1,2})\b", t)
     if m:
         d = int(m.group(1))
@@ -167,11 +177,9 @@ def parse_date_pt(text: str) -> Tuple[datetime, bool]:
         except ValueError:
             pass
 
-    # dd/mm(/aaaa)
     m = re.search(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", t)
     if m:
         d, mo, yr = int(m.group(1)), int(m.group(2)), int(m.group(3)) if m.group(3) else now.year
-        # normaliza ano 2 dígitos
         if yr < 100:
             yr += 2000
         try:
@@ -179,7 +187,6 @@ def parse_date_pt(text: str) -> Tuple[datetime, bool]:
         except ValueError:
             pass
 
-    # default: hoje
     return datetime.combine(base, time(0,0), tzinfo=BRT), mentions_tomorrow
 
 def parse_time_prefs_pt(text: str) -> Tuple[Optional[int], Optional[int], Optional[int], str]:
@@ -190,37 +197,29 @@ def parse_time_prefs_pt(text: str) -> Tuple[Optional[int], Optional[int], Option
             'próximo/perto/às X'; hora solta '15' como fallback.
     """
     t_raw = (text or "").lower()
-
-    # limpar números de DATA para não virar "hora"
-    t = re.sub(r"\bdia\s+\d{1,2}\b", "", t_raw)                       # remove "dia 07"
-    t = re.sub(r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b", "", t)             # remove "dd/mm(/aaaa)"
+    t = re.sub(r"\bdia\s+\d{1,2}\b", "", t_raw)
+    t = re.sub(r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b", "", t)
     t = re.sub(r"\s+", " ", t).strip()
-
-    # períodos do dia
     if any(k in t for k in ["manhã","manha","de manhã","de manha"]):
         return 8, 12, None, "period"
     if any(k in t for k in ["tarde","à tarde","a tarde","depois do almoço","mais tarde"]):
         return 13, 18, None, "period"
 
-    # "a partir / após / depois" de X (aceita da/das/as/às)
     m = re.search(r"(a partir|ap[óo]s|depois)\s+(?:d?[àa]s?\s*)?(\d{1,2})h?", t)
     if m:
         h = min(max(int(m.group(2)), 0), 23)
         return h, 20, h, "after"
 
-    # "X até Y"
     nums = re.findall(r"\b(\d{1,2})h?\b", t)
     if "até" in t and len(nums) >= 2:
         h1, h2 = int(nums[0]), int(nums[1])
         return min(h1, h2), max(h1, h2), (h1 + h2)//2, "range"
 
-    # "próximo/perto/às X"
     m = re.search(r"(pr[óo]ximo|perto|[àa]s?)\s*(\d{1,2})h?", t)
     if m:
         h = min(max(int(m.group(2)), 0), 23)
         return max(8, h-2), min(20, h+2), h, "around"
 
-    # hora solta (pega a ÚLTIMA ocorrência para favorecer a que vem depois da data)
     nums = re.findall(r"\b(\d{1,2})h?\b", t)
     if nums:
         h = min(max(int(nums[-1]), 0), 23)
@@ -239,7 +238,6 @@ def plan_windows(text: str) -> Tuple[datetime, datetime, Optional[int], str, Lis
     base_brt, said_tomorrow = parse_date_pt(text)
     sh, eh, alvo, modo = parse_time_prefs_pt(text)
 
-    # defaults
     if sh is None and eh is None:
         sh, eh = (13, 18) if said_tomorrow else (9, 18)
 
@@ -250,13 +248,11 @@ def plan_windows(text: str) -> Tuple[datetime, datetime, Optional[int], str, Lis
 
     fallbacks: List[Tuple[datetime,datetime]] = []
 
-    # se não disse "amanhã": fallback = mesma janela no próximo dia
     if not said_tomorrow:
         fs = (start_brt + timedelta(days=1)).astimezone(timezone.utc)
         fe = (end_brt + timedelta(days=1)).astimezone(timezone.utc)
         fallbacks.append((fs, fe))
 
-    # fallback final: dia inteiro (amanhã se não disse "amanhã")
     whole = base_brt.date() if said_tomorrow else (base_brt + timedelta(days=1)).date()
     ws = datetime.combine(whole, time(0,0), tzinfo=BRT).astimezone(timezone.utc)
     we = datetime.combine(whole, time(23,59,59), tzinfo=BRT).astimezone(timezone.utc)
@@ -264,21 +260,124 @@ def plan_windows(text: str) -> Tuple[datetime, datetime, Optional[int], str, Lis
 
     return start_utc, end_utc, alvo, modo, fallbacks
 
-# -----------------------------------------------------------------------------
-# Handler principal
-# -----------------------------------------------------------------------------
 @router.post("/chat")
 def chat(body: ChatIn):
+    _ensure_db()
+    _ensure_field_ids_initialized()
+    
+    original_session_id = body.sessionId
+    session_id = original_session_id
+    
+    with get_session() as temp_db:
+        expired, last_activity = is_session_expired(temp_db, session_id)
+        if expired:
+            return {
+                "reply": "Sua sessão expirou por inatividade. Por favor, recarregue a página para iniciar uma nova conversa.",
+                "action": {"type": "SESSION_EXPIRED"},
+                "sessionId": session_id,
+            }
+    
+    old_lead_data = None
+    existing_card_id = None
+    
+    try:
+        with get_session() as temp_db:
+            old_lead = get_lead_by_session(temp_db, original_session_id)
+            if old_lead and (old_lead.name or old_lead.email or old_lead.company):
+                old_lead_data = {
+                    "name": old_lead.name,
+                    "email": old_lead.email,
+                    "company": old_lead.company,
+                    "need": old_lead.need,
+                }
+            
+            try:
+                if old_lead_data and old_lead_data.get("name") and old_lead_data.get("email"):
+                    stmt = select(Lead).where(
+                        (Lead.name == old_lead_data.get("name")) &
+                        (Lead.email == old_lead_data.get("email")) &
+                        (Lead.session_id != original_session_id)
+                    )
+                    matching_lead = temp_db.exec(stmt).first()
+                    if matching_lead and _is_pipefy_card_id(matching_lead.session_id):
+                        existing_card_id = matching_lead.session_id
+            except Exception:
+                pass
+    except Exception:
+        pass
+    
+    if existing_card_id:
+        session_id = existing_card_id
+        body.sessionId = session_id
+    
     with get_session() as db:
-        # salva mensagem do usuário
-        db.add(Message(session_id=body.sessionId, role="user", content=body.message))
-        db.commit()
+        try:
+            db.add(Message(session_id=session_id, role="user", content=body.message))
+            db.commit()
 
-        # carrega lead + histórico
-        lead = get_lead_by_session(db, body.sessionId)
-        history = load_history(db, body.sessionId)
+            lead = get_lead_by_session(db, session_id)
+            
+            if session_id != original_session_id and old_lead_data and not (lead.name and lead.email):
+                merged_old = merge_lead(lead, old_lead_data)
+                db.add(merged_old)
+                db.commit()
+                db.refresh(merged_old)
+                lead = merged_old
+            
+            if lead.email and "@" in lead.email and not _is_pipefy_card_id(session_id):
+                try:
+                    pipe_id = os.getenv("PIPEFY_PIPE_ID", "306783445")
+                    existing_card_id = find_card_by_email(pipe_id, lead.email)
+                    
+                    if existing_card_id:
+                        lead.interest_confirmed = None
+                        session_id = str(existing_card_id)
+                        body.sessionId = session_id
+                        lead.session_id = session_id
+                        db.add(lead)
+                        db.commit()
+                        db.refresh(lead)
+                except Exception:
+                    pass
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            raise
+        
+        history = load_history(db, session_id)
+        if not history and session_id != original_session_id:
+            old_history = load_history(db, original_session_id)
+            if old_history:
+                for msg in old_history:
+                    msg_obj = Message(session_id=session_id, role=msg["role"], content=msg["content"])
+                    db.add(msg_obj)
+                db.commit()
+                history = load_history(db, session_id)
+        
+        is_re_engagement = (
+            _is_pipefy_card_id(session_id) and 
+            session_id != original_session_id and
+            lead.email and "@" in lead.email and
+            lead.interest_confirmed is False
+        )
+        
+        if is_re_engagement:
+            lead.interest_confirmed = None
+            db.add(lead)
+            db.commit()
+            db.refresh(lead)
 
+        is_re_engagement_detected = (
+            _is_pipefy_card_id(session_id) and 
+            session_id != original_session_id
+        )
+        
         def build_state(slots=None):
+            context_data = {"slots": slots} if slots else {}
+            if is_re_engagement_detected:
+                context_data["is_re_engagement"] = True
+                context_data["re_engagement_note"] = "ATENÇÃO: Este lead estava 'Não Interessado' anteriormente, mas está re-engajando. IGNORE qualquer indicação de não interesse no histórico antigo e trate como uma nova oportunidade. Se o lead expressar interesse agora, defina interestConfirmed: true."
+            
             return {
                 "lead": {
                     "name": lead.name,
@@ -287,131 +386,188 @@ def chat(body: ChatIn):
                     "need": lead.need,
                     "interestConfirmed": lead.interest_confirmed,
                 },
-                "context": {"slots": slots} if slots else {},
+                "context": context_data,
                 "history": history,
             }
 
-        # 1ª rodada do LLM (sem slots)
         resp = llm.respond(build_state(), body.message)
-
-        # mescla lead parcial
-        merged = merge_lead(lead, resp.get("leadPartial") or {})
+        lead_partial_from_llm = resp.get("leadPartial") or {}
+        merged = merge_lead(lead, lead_partial_from_llm)
+        
+        if merged.email and "@" in merged.email and not _is_pipefy_card_id(session_id):
+            try:
+                pipe_id = os.getenv("PIPEFY_PIPE_ID", "306783445")
+                existing_card_id = find_card_by_email(pipe_id, merged.email)
+                
+                if existing_card_id:
+                    merged.interest_confirmed = None
+                    session_id = str(existing_card_id)
+                    body.sessionId = session_id
+                    is_re_engagement_detected = True
+            except Exception as e:
+                pass
+        
         db.add(merged)
         db.commit()
+        db.refresh(merged)
         
-        # Sincroniza com Pipefy se sessionId for um card_id do Pipefy
-        # Verifica se houve mudanças nos dados do lead
-        lead_partial = resp.get("leadPartial") or {}
-        if lead_partial and _is_pipefy_card_id(body.sessionId):
-            # Detecta quais campos foram atualizados
-            name_updated = "name" in lead_partial and lead_partial["name"] and lead_partial["name"] != lead.name
-            email_updated = "email" in lead_partial and lead_partial["email"] and lead_partial["email"] != lead.email
-            company_updated = "company" in lead_partial and lead_partial["company"] and lead_partial["company"] != lead.company
-            need_updated = "need" in lead_partial and lead_partial["need"] and lead_partial["need"] != lead.need
-            
-            if name_updated or email_updated or company_updated or need_updated:
-                # Atualiza Pipefy de forma não-bloqueante
-                try:
-                    # Usa valores do merged (já atualizado)
-                    update_card_lead_fields(
-                        card_id=body.sessionId,
-                        name=merged.name if name_updated else None,
-                        email=merged.email if email_updated else None,
-                        company=merged.company if company_updated else None,
-                        need=merged.need if need_updated else None,
+        has_all_required_data = (
+            merged.name and 
+            merged.email and "@" in merged.email and 
+            merged.company and 
+            merged.need
+        )
+        
+        if has_all_required_data and not _is_pipefy_card_id(session_id):
+            try:
+                pipe_id = os.getenv("PIPEFY_PIPE_ID", "306783445")
+                existing_card_id = find_card_by_email(pipe_id, merged.email)
+                
+                if existing_card_id:
+                    session_id = str(existing_card_id)
+                    body.sessionId = session_id
+                    merged.session_id = session_id
+                    db.add(merged)
+                    db.commit()
+                    db.refresh(merged)
+                else:
+                    fields_to_use = {
+                        FIELD_NAMES["nome_do_lead"]: merged.name,
+                        FIELD_NAMES["email_do_lead"]: merged.email,
+                        FIELD_NAMES["empresa_do_lead"]: merged.company,
+                        FIELD_NAMES["necessidade_do_lead"]: merged.need,
+                    }
+                    
+                    card_title = f"{merged.name.strip()} - {merged.email.strip()}"
+                    result = create_card(
+                        pipe_id=pipe_id,
+                        title=card_title,
+                        fields=fields_to_use,
                     )
-                    print(f"[CHAT] ✅ Dados do lead sincronizados com Pipefy (card {body.sessionId})")
-                except Exception as e:
-                    # Não bloqueia o chat se Pipefy falhar
-                    print(f"[CHAT] ⚠️ Erro ao sincronizar com Pipefy (não crítico): {e}")
+                    
+                    if result and isinstance(result, dict):
+                        card = result.get("card")
+                        if card and isinstance(card, dict):
+                            new_card_id = card.get("id")
+                            if new_card_id:
+                                session_id = str(new_card_id)
+                                body.sessionId = session_id
+                                merged.session_id = session_id
+                                db.add(merged)
+                                db.commit()
+                                db.refresh(merged)
+            except Exception:
+                pass
+        
+        if session_id != original_session_id and (merged.name or merged.email or merged.company):
+            original_lead = get_lead_by_session(db, original_session_id)
+            if not (original_lead.name and original_lead.email):
+                original_lead.name = merged.name
+                original_lead.email = merged.email
+                original_lead.company = merged.company
+                original_lead.need = merged.need
+                original_lead.interest_confirmed = merged.interest_confirmed
+                db.add(original_lead)
+                db.commit()
+        
+        if _is_pipefy_card_id(session_id):
+            has_data_to_sync = (
+                (merged.name and merged.name != "Aguardando coleta...") or
+                (merged.email and merged.email != "aguardando@coleta.com") or
+                (merged.company and merged.company != "Aguardando coleta...") or
+                (merged.need and merged.need != "Aguardando coleta...")
+            )
+            
+            if has_data_to_sync:
+                try:
+                    name_to_sync = merged.name if (merged.name and merged.name != "Aguardando coleta...") else None
+                    email_to_sync = merged.email if (merged.email and merged.email != "aguardando@coleta.com") else None
+                    company_to_sync = merged.company if (merged.company and merged.company != "Aguardando coleta...") else None
+                    need_to_sync = merged.need if (merged.need and merged.need != "Aguardando coleta...") else None
+                    interest_confirmed = merged.interest_confirmed if merged.interest_confirmed is not None else None
+                    
+                    no_interest_reason = None
+                    if interest_confirmed is False:
+                        no_interest_reason = (
+                            lead_partial_from_llm.get("noInterestReason") or
+                            lead_partial_from_llm.get("motivo") or
+                            lead_partial_from_llm.get("motivo_nao_interesse")
+                        )
+                        
+                        if not no_interest_reason and need_to_sync:
+                            no_interest_reason = need_to_sync
+                        
+                        if not no_interest_reason:
+                            user_message_lower = body.message.lower()
+                            if len(body.message.strip()) > 10 and not any(word in user_message_lower for word in ["oi", "olá", "bom dia", "boa tarde", "boa noite", "?"]):
+                                no_interest_reason = body.message.strip()
+                        
+                        if not no_interest_reason:
+                            no_interest_reason = "Não especificado pelo lead"
+                    
+                    if interest_confirmed is False and not no_interest_reason:
+                        no_interest_reason = "Não especificado pelo lead"
+                    
+                    update_card_lead_fields(
+                        card_id=session_id,
+                        name=name_to_sync,
+                        email=email_to_sync,
+                        company=company_to_sync,
+                        need=need_to_sync,
+                        interest_confirmed=interest_confirmed,
+                        no_interest_reason=no_interest_reason if interest_confirmed is False else None,
+                    )
+                except Exception:
+                    pass
 
         want_slots = merged.interest_confirmed is True
         offered_slots = (resp.get("action") or {}).get("type") == "OFFER_SLOTS"
 
-        print(f"[CHAT] want_slots={want_slots}, offered_slots={offered_slots}")
-
         if want_slots and not offered_slots:
-            # 1) planeja janelas com base na frase do usuário
             rs, re, alvo_h, modo, fallbacks = plan_windows(body.message)
-            print(f"[CHAT] janela principal (UTC): {rs} → {re} | modo={modo} alvo={alvo_h}")
-
-            # 2) busca slots na janela principal e FILTRA pela janela em BRT
-            print(f"[CHAT] Buscando slots no cal.com: {rs} → {re}")
             slots = get_slots(rs, re)
-            print(f"[CHAT] Slots retornados do cal.com: {len(slots)}")
-            if slots:
-                print(f"[CHAT] Primeiros slots recebidos: {[{'id': s.get('id', '?'), 'start': s.get('start', '?')} for s in slots[:3]]}")
-                print(f"[CHAT] Janela de filtro (BRT): {_to_brt(rs)} → {_to_brt(re)}")
             slots = filter_slots_by_window(slots, rs, re)
-            print(f"[CHAT] Slots após filtro de janela: {len(slots)}")
 
-            # 3) 'a partir de X' → garanta >= X em BRT
             if modo == "after" and alvo_h is not None:
                 slots = clamp_after_hour(slots, alvo_h)
-                print(f"[CHAT] Slots após clamp_after_hour (h >= {alvo_h}): {len(slots)}")
 
-            # 4) fallbacks (mesma janela amanhã; depois dia inteiro, mas ainda filtra)
             i = 0
             while not slots and i < len(fallbacks):
                 fs, fe = fallbacks[i]
-                print(f"[CHAT] fallback {i+1}: {fs} → {fe}")
-                print(f"[CHAT] Buscando slots no cal.com (fallback {i+1}): {fs} → {fe}")
                 slots = get_slots(fs, fe)
-                print(f"[CHAT] Slots retornados do cal.com (fallback {i+1}): {len(slots)}")
                 slots = filter_slots_by_window(slots, fs, fe)
-                print(f"[CHAT] Slots após filtro de janela (fallback {i+1}): {len(slots)}")
                 if modo == "after" and alvo_h is not None:
                     slots = clamp_after_hour(slots, alvo_h)
-                    print(f"[CHAT] Slots após clamp_after_hour (fallback {i+1}): {len(slots)}")
                 i += 1
 
-            # 5) prioriza por proximidade quando houver alvo_h
             slots = prioritize_slots(slots, alvo_h)
-
-            # 6) limita a 5 (aumentado de 3 para dar mais opções quando há muitos slots disponíveis)
             slots = slots[:5]
-            print(f"[CHAT] Total de slots após filtros e priorização: {len(slots)}")
 
-            # Se não encontrou slots após filtros, tenta estratégias alternativas
             if not slots:
-                print("[CHAT] ⚠️ Nenhum slot encontrado após busca e filtros, tentando estratégias alternativas")
-                
-                # Estratégia 1: Se o usuário especificou um dia específico, busca slots do mesmo dia sem restrição de hora
                 base_brt, _ = parse_date_pt(body.message)
-                if base_brt.date() != _today_brt().date():  # Se não é hoje
-                    print(f"[CHAT] Buscando slots do dia solicitado ({base_brt.date()}) sem restrição de hora")
+                if base_brt.date() != _today_brt().date():
                     dia_inicio_utc = datetime.combine(base_brt.date(), time(0,0), tzinfo=BRT).astimezone(timezone.utc)
                     dia_fim_utc = datetime.combine(base_brt.date(), time(23,59,59), tzinfo=BRT).astimezone(timezone.utc)
                     alt_slots = get_slots(dia_inicio_utc, dia_fim_utc)
                     if alt_slots:
-                        # Filtra apenas pela data, não pela hora
                         alt_slots = [s for s in alt_slots if _to_brt(datetime.fromisoformat(s["start"].replace("Z", "+00:00"))).date() == base_brt.date()]
                         if alt_slots:
                             alt_slots = sorted(alt_slots, key=lambda s: s.get("start", ""))[:5]
-                            print(f"[CHAT] Encontrei {len(alt_slots)} slots do dia solicitado em outros horários")
                             slots = alt_slots
                 
-                # Estratégia 2: Se ainda não tem slots, busca nos próximos dias
                 if not slots:
-                    print("[CHAT] Buscando slots alternativos nos próximos dias")
                     from datetime import timedelta
                     tomorrow_utc = (datetime.now(timezone.utc) + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
                     week_later_utc = tomorrow_utc + timedelta(days=7)
                     alt_slots = get_slots(tomorrow_utc, week_later_utc)
-                    # Limita a 5 e ordena por data
                     if alt_slots:
                         alt_slots = sorted(alt_slots, key=lambda s: s.get("start", ""))[:5]
-                        print(f"[CHAT] Encontrei {len(alt_slots)} slots alternativos para oferecer")
                         slots = alt_slots
 
             if not slots:
-                print("[CHAT] ⚠️ Nenhum slot disponível em nenhum período")
-                # Se não encontrou slots, informa ao usuário
                 resp["reply"] = "Desculpe, não encontrei horários disponíveis no período solicitado. Você teria alguma outra preferência de dia e horário?"
                 resp["action"] = {"type": "ASK"}
             else:
-                # 7) reinvoca LLM para oferecer (sem inventar)
-                # Verifica se os slots são do dia solicitado mas em horário diferente
                 base_brt, _ = parse_date_pt(body.message)
                 slots_date = None
                 if slots:
@@ -419,31 +575,26 @@ def chat(body: ChatIn):
                     slots_date = first_slot_date
                 
                 if modo == "after" and alvo_h is not None and slots_date == base_brt.date():
-                    # Slots do mesmo dia mas em horário diferente - precisa informar
                     prompt = f"O usuário pediu horários após as {alvo_h}h do dia {base_brt.strftime('%d/%m')}, mas só temos disponibilidade em outros horários do mesmo dia. Ofereça estes horários explicando que são do dia solicitado mas em horários diferentes, e pergunte se algum deles funciona."
                 else:
                     prompt = "Ofereça estes horários para o usuário, no mesmo idioma."
                 
-                print(f"[CHAT] Encontrei {len(slots)} slots, reinvocando LLM para oferecer")
                 resp = llm.respond(build_state(slots=slots), prompt)
                 act = resp.get("action") or {}
                 if not act.get("type"):
                     act["type"] = "OFFER_SLOTS"
                 act["slots"] = slots
-                # Garante que o reply esteja no action quando há slots
                 reply_text = act.get("reply") or resp.get("reply") or "Perfeito! Esses horários funcionam pra você?"
                 act["reply"] = reply_text
                 resp["action"] = act
-                # Garante que reply no nível raiz também exista para compatibilidade
                 if not resp.get("reply"):
                     resp["reply"] = reply_text
-                print(f"[CHAT] Action configurado: type={act.get('type')}, slots={len(act.get('slots', []))}, reply={reply_text[:50]}...")
-                print(f"[CHAT] Slots que serão enviados: {[s.get('start') for s in slots[:3]]}")
 
-        # normaliza reply
         reply = resp.get("action", {}).get("reply") or resp.get("reply") or "Certo."
-
-        # salva resposta do bot
-        db.add(Message(session_id=body.sessionId, role="assistant", content=reply))
+        db.add(Message(session_id=session_id, role="assistant", content=reply))
         db.commit()
+        
+        if "sessionId" not in resp:
+            resp["sessionId"] = session_id
+        
         return resp
