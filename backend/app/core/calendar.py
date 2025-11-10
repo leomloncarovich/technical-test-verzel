@@ -4,7 +4,7 @@ from typing import List, Dict, Optional, Any
 import httpx
 
 MOCK = os.getenv("MOCK_EXTERNALS", "true").lower() == "true"
-TZ = os.getenv("TZ", "America/Sao_Paulo")
+TIMEZONE = os.getenv("TIMEZONE", "America/Sao_Paulo")
 
 CAL_BASE = "https://api.cal.com"
 CAL_API_KEY = os.getenv("CAL_API_KEY")
@@ -84,7 +84,7 @@ def get_slots(preferred_start: Optional[dt.datetime], preferred_end: Optional[dt
 
     # Cal.com espera timezone IANA válido (ex: "America/Sao_Paulo" ou "UTC")
     # Garante que não está vindo com ":" ou outros caracteres inválidos
-    timezone_value = TZ.strip() if TZ else "UTC"
+    timezone_value = TIMEZONE.strip() if TIMEZONE else "UTC"
     if timezone_value.startswith(":"):
         timezone_value = timezone_value[1:]  # Remove ":" se presente
     if not timezone_value or timezone_value == ":":
@@ -184,7 +184,7 @@ def schedule_slot(
 
     # Cal.com espera timezone IANA válido (ex: "America/Sao_Paulo" ou "UTC")
     # Garante que não está vindo com ":" ou outros caracteres inválidos
-    timezone_value = TZ.strip() if TZ else "UTC"
+    timezone_value = TIMEZONE.strip() if TIMEZONE else "UTC"
     if timezone_value.startswith(":"):
         timezone_value = timezone_value[1:]  # Remove ":" se presente
     if not timezone_value or timezone_value == ":":
