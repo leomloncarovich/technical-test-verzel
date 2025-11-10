@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { getSessionId } from '../lib/session';
-import { postChat, schedule } from '../lib/api';
+import { getSessionId } from '../lib/session.js';
+import { postChat, schedule } from '../lib/api.js';
 
 type Msg = { who: 'user' | 'bot'; text: string };
 type Slot = { id: string; start: string; end: string };
