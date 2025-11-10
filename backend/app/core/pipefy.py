@@ -1213,17 +1213,38 @@ def update_card_lead_fields(
                 print(f"[PIPEFY] ⚠️ Erro ao atualizar motivo de não interesse: {type(e).__name__}: {str(e)}")
                 results["motivo_nao_interesse"] = f"error: {str(e)}"
     
-    # Atualiza o título do card se tiver nome e email/empresa
+    # Atualiza o título do card se tiver nome e email/empresa válidos
     # IMPORTANTE: Sempre atualiza o título no final para garantir que não seja sobrescrito
     # Formato: "Nome - Email" ou "Nome - Empresa" (se não tiver email)
-    # Isso garante que o título nunca seja "Sim" ou "Não" (valores do campo interesse_confirmado)
-    # NOTA: Não preserva o UUID no título - atualiza para "Nome - Email" limpo
-    if name and (email or company):
+    # Validações: Nome deve ter pelo menos 3 caracteres e não ser uma palavra de confirmação
+    # Email deve ser válido (ter @) e empresa deve ter pelo menos 2 caracteres
+    invalid_name_words = {"sim", "não", "nao", "ok", "yes", "no", "s", "n", "talvez", "pode ser"}
+    
+    def is_valid_name(n: str) -> bool:
+        if not n or len(n.strip()) < 3:
+            return False
+        n_lower = n.strip().lower()
+        if n_lower in invalid_name_words:
+            return False
+        return True
+    
+    def is_valid_email(e: str) -> bool:
+        return e and "@" in e and len(e.strip()) > 5
+    
+    def is_valid_company(c: str) -> bool:
+        if not c or len(c.strip()) < 2:
+            return False
+        c_lower = c.strip().lower()
+        if c_lower in invalid_name_words:
+            return False
+        return True
+    
+    if is_valid_name(name) and (is_valid_email(email) or is_valid_company(company)):
         try:
             # Gera o título no formato "Nome - Email" ou "Nome - Empresa" (sem UUID)
-            if email and "@" in email:
+            if is_valid_email(email):
                 new_title = f"{name.strip()} - {email.strip()}"
-            elif company:
+            elif is_valid_company(company):
                 new_title = f"{name.strip()} - {company.strip()}"
             else:
                 new_title = name.strip()
