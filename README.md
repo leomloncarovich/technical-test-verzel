@@ -4,6 +4,15 @@ Sistema completo de agente SDR (Sales Development Representative) automatizado q
 
 🔗 **Demo:** https://technical-test-verzel.vercel.app/
 
+## Produto escolhido
+
+O produto que eu escolhi vender neste desafio é uma consultoria para resolução de problemas de logística.
+
+Nós atendemos o lead de forma rápida e eficiente, resgatamos automaticamente seus dados e sua necessidade logística, e oferecemos uma reunião com especialistas para solucionar os problemas que ele descreveu.
+
+Identificamos o gargalo operacional (rotas, estoque, CD’s, prazos, custo de frete, nível de serviço, controle de entrada/saída) e conectamos o lead diretamente com um especialista para apresentar uma solução personalizada.
+
+
 ## 🚀 TL;DR (5 minutos)
 
 1. **Backend:** `cd backend && cp .env.example .env && uvicorn app.main:app --port 8000`
