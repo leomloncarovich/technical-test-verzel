@@ -1218,33 +1218,52 @@ def update_card_lead_fields(
     # Formato: "Nome - Email" ou "Nome - Empresa" (se não tiver email)
     # Validações: Nome deve ter pelo menos 3 caracteres e não ser uma palavra de confirmação
     # Email deve ser válido (ter @) e empresa deve ter pelo menos 2 caracteres
-    invalid_name_words = {"sim", "não", "nao", "ok", "yes", "no", "s", "n", "talvez", "pode ser"}
+    # CRÍTICO: NUNCA atualiza o título se o nome for inválido (ex: "sim", "não", etc.)
+    invalid_name_words = {"sim", "não", "nao", "ok", "yes", "no", "s", "n", "talvez", "pode ser", "claro", "certo", "perfeito"}
     
     def is_valid_name(n: str) -> bool:
-        if not n or len(n.strip()) < 3:
+        if not n:
             return False
-        n_lower = n.strip().lower()
+        n_stripped = n.strip()
+        if len(n_stripped) < 3:
+            return False
+        n_lower = n_stripped.lower()
         if n_lower in invalid_name_words:
+            return False
+        # Verifica se é apenas uma palavra de confirmação comum
+        if n_lower in {"ok", "okay", "tudo bem", "tudo certo"}:
             return False
         return True
     
     def is_valid_email(e: str) -> bool:
-        return e and "@" in e and len(e.strip()) > 5
+        if not e:
+            return False
+        e_stripped = e.strip()
+        return "@" in e_stripped and len(e_stripped) > 5
     
     def is_valid_company(c: str) -> bool:
-        if not c or len(c.strip()) < 2:
+        if not c:
             return False
-        c_lower = c.strip().lower()
+        c_stripped = c.strip()
+        if len(c_stripped) < 2:
+            return False
+        c_lower = c_stripped.lower()
         if c_lower in invalid_name_words:
             return False
         return True
     
-    if is_valid_name(name) and (is_valid_email(email) or is_valid_company(company)):
+    # CRÍTICO: Só atualiza o título se TODOS os dados forem válidos
+    # Se name for inválido (ex: "sim"), NÃO atualiza o título, mesmo que outros campos sejam atualizados
+    name_valid = is_valid_name(name) if name else False
+    email_valid = is_valid_email(email) if email else False
+    company_valid = is_valid_company(company) if company else False
+    
+    if name_valid and (email_valid or company_valid):
         try:
             # Gera o título no formato "Nome - Email" ou "Nome - Empresa" (sem UUID)
-            if is_valid_email(email):
+            if email_valid:
                 new_title = f"{name.strip()} - {email.strip()}"
-            elif is_valid_company(company):
+            elif company_valid:
                 new_title = f"{name.strip()} - {company.strip()}"
             else:
                 new_title = name.strip()
@@ -1256,6 +1275,9 @@ def update_card_lead_fields(
         except Exception as e:
             print(f"[PIPEFY] ⚠️ Erro ao atualizar título do card: {e}")
             # Não adiciona erro aos results pois título não é crítico
+    elif name and not name_valid:
+        # Se name foi fornecido mas é inválido, loga mas não atualiza o título
+        print(f"[PIPEFY] ⚠️ Nome inválido detectado ('{name}'), título do card NÃO será atualizado para evitar valores incorretos")
     
     if updates:
         print(f"[PIPEFY] ✅ Campos atualizados no Pipefy: {', '.join(updates)}")

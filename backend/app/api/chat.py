@@ -452,7 +452,30 @@ def chat(body: ChatIn):
                         FIELD_NAMES["necessidade_do_lead"]: merged.need,
                     }
                     
-                    card_title = f"{merged.name.strip()} - {merged.email.strip()}"
+                    # Valida nome antes de criar o título do card
+                    invalid_name_words = {"sim", "não", "nao", "ok", "yes", "no", "s", "n", "talvez", "pode ser"}
+                    
+                    def is_valid_name(n: str) -> bool:
+                        if not n or len(n.strip()) < 3:
+                            return False
+                        n_lower = n.strip().lower()
+                        if n_lower in invalid_name_words:
+                            return False
+                        return True
+                    
+                    def is_valid_email(e: str) -> bool:
+                        return e and "@" in e and len(e.strip()) > 5
+                    
+                    # Só cria título válido se nome e email forem válidos
+                    if is_valid_name(merged.name) and is_valid_email(merged.email):
+                        card_title = f"{merged.name.strip()} - {merged.email.strip()}"
+                    elif is_valid_name(merged.name) and merged.company and len(merged.company.strip()) >= 2:
+                        # Fallback: usa empresa se email não for válido
+                        card_title = f"{merged.name.strip()} - {merged.company.strip()}"
+                    else:
+                        # Se não tiver dados válidos, usa um título genérico temporário
+                        card_title = f"Lead - {merged.email.strip() if merged.email and '@' in merged.email else 'Sem email'}"
+                    
                     result = create_card(
                         pipe_id=pipe_id,
                         title=card_title,
