@@ -2,7 +2,7 @@
 
 Sistema completo de agente SDR (Sales Development Representative) automatizado que conduz conversas naturais com leads, coleta informações, agenda reuniões e gerencia leads no Pipefy. Desenvolvido como parte do desafio técnico Elite Dev IA.
 
-🔗 **Demo:** [Link do Vercel aqui após deploy]
+🔗 **Demo:** https://technical-test-verzel.vercel.app/
 
 ## 🚀 TL;DR (5 minutos)
 
@@ -506,32 +506,30 @@ Após o deploy, acesse a URL fornecida pelo Vercel e teste o chat.
 - Verifique se os campos necessários existem no pipe
 - Verifique os logs do backend para erros específicos
 
-### Próximos Passos (Melhorias Futuras)
-
-- [ ] Suporte a múltiplos idiomas
-- [ ] Integração com outros provedores de calendário (Google Calendar, Outlook)
-- [ ] Dashboard de analytics de leads
-- [ ] Notificações por email/SMS
-- [ ] Suporte a upload de arquivos no chat
-- [ ] Integração com CRM adicional
-- [ ] Testes automatizados (unitários e integração)
-
 ## 📸 Screenshots
 
-> 💡 **Nota:** Adicione screenshots do projeto em funcionamento:
->
-> - Interface do chat (Hero + Chat)
-> - Booking criado no Cal.com
-> - Card criado/atualizado no Pipefy
+><img width="1787" height="1040" alt="SDR Agent - Google Chrome 11_11_2025 01_39_10" src="https://github.com/user-attachments/assets/5629d00d-3bbc-4316-aa57-c5d42ba6add3" />
+> - Início da conversa
 
-## 📝 Licença
+><img width="1920" height="1040" alt="SDR Agent - Google Chrome 11_11_2025 01_41_00" src="https://github.com/user-attachments/assets/5e395c7f-bb20-4bd9-b177-9fcf8b0e27af" />
+> - Pedido de nome e email
 
-Este projeto foi desenvolvido como parte de um teste técnico.
+><img width="1920" height="1040" alt="SDR Agent - Google Chrome 11_11_2025 01_43_23" src="https://github.com/user-attachments/assets/fd73b75c-cd9f-43eb-a329-41c5a569deb8" />
+> - Pedido do nome da empresa e confirmação de interesse
 
-## 👤 Autor
+><img width="1920" height="1040" alt="SDR Agent - Google Chrome 11_11_2025 01_44_00" src="https://github.com/user-attachments/assets/df3f5f70-ff0e-4a17-bece-a5db80227e53" />
+> - Confirmação de interesse e agendamento de reunião funcionando!
 
-Desenvolvido como parte do desafio técnico Elite Dev IA.
+><img width="958" height="1039" alt="Pré-vendas _ SDR - Pipefy _ Organizar os processos do seu time pode ser fácil - Google Chrome 11_11_2025 01_41_58" src="https://github.com/user-attachments/assets/bf77b6f1-d65d-4fd9-ad79-f9e94c3d4386" />
+> - Pipefy antes de confirmar interesse, esperando para enviar para Agendado ou para Não Interessadado
 
----
+><img width="1920" height="1040" alt="SDR Agent - Google Chrome 11_11_2025 01_44_58" src="https://github.com/user-attachments/assets/c67a1399-9f72-4fd3-8d63-4f987572910b" />
+> - Form preenchido (Já com o interesse confirmado)
+
+><img width="1920" height="1040" alt="SDR Agent - Google Chrome 11_11_2025 01_45_21" src="https://github.com/user-attachments/assets/0f31eb36-f26a-45bb-9a39-21e01c2bd73b" />
+> - Card em Agendado, ja com link da reunião correto e dataTime definido!
+
+><img width="1920" height="1040" alt="Your booking has been confirmed _ Cal com - Google Chrome 11_11_2025 01_59_25" src="https://github.com/user-attachments/assets/d051453f-1e54-4e94-adcd-8d355ffa7b13" />
+> - Prova da reunião marcada com email do exemplo acima
 
 **Última atualização**: 2025-11-10
