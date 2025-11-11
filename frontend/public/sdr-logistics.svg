@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- Rota: termina exatamente no bico do pin (25,20) -->
+  <path d="M3 24
+           C 10 22, 14 21, 18 18
+           S 24 16, 25 20"
+        fill="none"
+        stroke="#22D3EE"
+        stroke-width="3.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+  
+  <!-- Pin final com check (escala 0.6). Tip local é (12,32) -> após escala, (12*0.6, 32*0.6) = (7.2, 19.2)
+       Para alinhar o bico em (25,20): translate(25-7.2, 20-19.2) = translate(17.8, 0.8) -->
+  <g transform="translate(17.8,0.8) scale(0.6)">
+    <!-- corpo do pin -->
+    <path d="M0,12
+             a12,12 0 1 1 24,0
+             c0,9 -12,20 -12,20
+             S0,21 0,12Z"
+          fill="#22C55E"/>
+    
+    <!-- check interno -->
+    <path d="M6 14 l4 4 l8 -10"
+          fill="none" stroke="#FFFFFF" stroke-width="3"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
